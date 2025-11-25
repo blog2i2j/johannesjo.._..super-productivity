@@ -45,6 +45,7 @@ import { MatIcon } from '@angular/material/icon';
 import { IS_ANDROID_WEB_VIEW } from '../../../util/is-android-web-view';
 import { devError } from '../../../util/dev-error';
 import { IssueLog } from '../../../core/log';
+import { TrelloAdditionalCfgComponent } from '../providers/trello/trello-view-components/trello_cfg/trello_additional_cfg.component';
 
 @Component({
   selector: 'dialog-edit-issue-provider',
@@ -65,6 +66,7 @@ import { IssueLog } from '../../../core/log';
     MatButton,
     MatIcon,
     MatDialogTitle,
+    TrelloAdditionalCfgComponent, // added for custom trello board loading support
   ],
   templateUrl: './dialog-edit-issue-provider.component.html',
   styleUrl: './dialog-edit-issue-provider.component.scss',
@@ -146,7 +148,9 @@ export class DialogEditIssueProviderComponent {
 
   customCfgCmpSave(cfgUpdates: IssueIntegrationCfg): void {
     IssueLog.log('customCfgCmpSave()', cfgUpdates);
+    console.log('Dialog received config update:', cfgUpdates);
     this.updateModel(cfgUpdates);
+    console.log('Dialog model after update:', this.model);
   }
 
   updateModel(model: Partial<IssueProvider>): void {
