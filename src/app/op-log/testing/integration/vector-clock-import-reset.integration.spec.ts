@@ -280,10 +280,11 @@ describe('Vector Clock Import Reset Integration', () => {
     });
 
     /**
-     * Verify that pre-import ops from other clients ARE correctly filtered.
-     * This ensures the filter isn't just passing everything through.
+     * Verify that pre-import ops from unknown clients (never communicated with import
+     * client) are KEPT. The import has no knowledge of these clients, so it can't
+     * claim to supersede their ops (independent timelines).
      */
-    it('should filter pre-import ops from clients that did not see the import', async () => {
+    it('should keep pre-import ops from clients unknown to the import', async () => {
       const clientA = new SimulatedClient('client-aaa', storeService);
       const clientB = new SimulatedClient('client-bbb', storeService);
       const clientC = new SimulatedClient('client-ccc', storeService);
@@ -371,13 +372,12 @@ describe('Vector Clock Import Reset Integration', () => {
         postImportOpB,
       ]);
 
-      // Pre-import op from C should be filtered
-      expect(result.invalidatedOps.length).toBe(1);
-      expect(result.invalidatedOps[0].entityId).toBe('taskC-pre');
-
-      // Post-import op from B should be kept
-      expect(result.validOps.length).toBe(1);
-      expect(result.validOps[0].entityId).toBe('taskB-post');
+      // Pre-import op from C should be KEPT (unknown client - import has no entry for C)
+      // Post-import op from B should also be kept (GREATER_THAN)
+      expect(result.invalidatedOps.length).toBe(0);
+      expect(result.validOps.length).toBe(2);
+      expect(result.validOps.find((op) => op.entityId === 'taskC-pre')).toBeDefined();
+      expect(result.validOps.find((op) => op.entityId === 'taskB-post')).toBeDefined();
     });
   });
 
