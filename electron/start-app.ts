@@ -269,6 +269,8 @@ export const startApp = (): void => {
       setIsLocked(false);
       sendIdleMsgIfOverMin(idleTime);
       mainWin.webContents.send(IPC.RESUME);
+      // Restore keyboard focus after system resume (electron#20464)
+      showOrFocus(mainWin);
     });
 
     powerMonitor.on('unlock-screen', () => {
@@ -277,6 +279,8 @@ export const startApp = (): void => {
       setIsLocked(false);
       sendIdleMsgIfOverMin(idleTime);
       mainWin.webContents.send(IPC.RESUME);
+      // Restore keyboard focus after screen unlock (electron#20464)
+      showOrFocus(mainWin);
     });
 
     protocol.registerFileProtocol('file', (request, callback) => {
