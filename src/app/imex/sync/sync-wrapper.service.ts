@@ -387,6 +387,8 @@ export class SyncWrapperService {
         error instanceof MissingRefreshTokenAPIError ||
         error instanceof MissingCredentialsSPError
       ) {
+        this._providerManager.setSyncStatus('ERROR');
+        this._superSyncStatusService.clearScope();
         // Clear stale auth credentials so isReady() returns false and re-auth dialog opens
         if (providerId) {
           try {

@@ -148,10 +148,14 @@ describe('SyncWrapperService', () => {
     // startWaiting returns a stopWaiting function
     mockUserInputWaitState.startWaiting.and.returnValue(() => {});
 
-    mockSuperSyncStatusService = jasmine.createSpyObj('SuperSyncStatusService', [], {
-      isConfirmedInSync: signal(false),
-      hasNoPendingOps: signal(false),
-    });
+    mockSuperSyncStatusService = jasmine.createSpyObj(
+      'SuperSyncStatusService',
+      ['clearScope'],
+      {
+        isConfirmedInSync: signal(false),
+        hasNoPendingOps: signal(false),
+      },
+    );
 
     TestBed.configureTestingModule({
       providers: [
@@ -542,6 +546,8 @@ describe('SyncWrapperService', () => {
       const result = await service.sync();
 
       expect(result).toBe('HANDLED_ERROR');
+      expect(mockProviderManager.setSyncStatus).toHaveBeenCalledWith('ERROR');
+      expect(mockSuperSyncStatusService.clearScope).toHaveBeenCalled();
       expect(mockSnackService.open).toHaveBeenCalledWith(
         jasmine.objectContaining({
           type: 'ERROR',
@@ -558,6 +564,8 @@ describe('SyncWrapperService', () => {
       const result = await service.sync();
 
       expect(result).toBe('HANDLED_ERROR');
+      expect(mockProviderManager.setSyncStatus).toHaveBeenCalledWith('ERROR');
+      expect(mockSuperSyncStatusService.clearScope).toHaveBeenCalled();
       expect(mockSnackService.open).toHaveBeenCalledWith(
         jasmine.objectContaining({
           type: 'ERROR',
@@ -574,6 +582,8 @@ describe('SyncWrapperService', () => {
       const result = await service.sync();
 
       expect(result).toBe('HANDLED_ERROR');
+      expect(mockProviderManager.setSyncStatus).toHaveBeenCalledWith('ERROR');
+      expect(mockSuperSyncStatusService.clearScope).toHaveBeenCalled();
       expect(mockSnackService.open).toHaveBeenCalledWith(
         jasmine.objectContaining({
           type: 'ERROR',
