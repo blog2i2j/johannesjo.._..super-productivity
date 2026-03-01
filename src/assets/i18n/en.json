@@ -264,8 +264,8 @@
     "GITEA": {
       "FORM": {
         "HOST": "Host (e.g. https://try.gitea.io)",
-        "REPO_FULL_NAME": "Username or Organization name/project",
-        "REPO_FULL_NAME_DESCRIPTION": "Can be found as part of the URL when viewing the project in a web browser.",
+        "REPO_FULL_NAME": "Username or Organization name/repository",
+        "REPO_FULL_NAME_DESCRIPTION": "Can be found as part of the URL when viewing the repository in a web browser.",
         "SCOPE": "Scope",
         "SCOPE_ALL": "All",
         "SCOPE_ASSIGNED": "Assigned to me",
