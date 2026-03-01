@@ -14,7 +14,7 @@ flowchart TD
     FRESH -->|No| UPLOAD
     FRESH -->|Yes| LOCAL_DATA{Has local data?}
     LOCAL_DATA -->|No| CONFIRM[Confirm dialog:<br/>Download remote?]
-    LOCAL_DATA -->|Yes| CONFLICT_DLG[Conflict dialog:<br/>USE_LOCAL / USE_REMOTE / CANCEL]
+    LOCAL_DATA -->|Yes| CONFLICT_DLG[SyncConflictDialog:<br/>USE_LOCAL / USE_REMOTE / CANCEL]
     CONFIRM -->|OK| APPLY
     CONFIRM -->|Cancel| CANCELLED([Sync Cancelled])
     CONFLICT_DLG -->|Use Local| FORCE_UP[Force upload local state<br/>SYNC_IMPORT]
@@ -35,7 +35,7 @@ flowchart TD
     IS_IMPORT -->|No| CONFLICT_CHK
 
     PENDING -->|No| MEANINGFUL{Has meaningful<br/>local data?}
-    MEANINGFUL -->|Yes| IMPORT_DLG[Conflict dialog:<br/>import reason shown,<br/>Use Server Data recommended]
+    MEANINGFUL -->|Yes| IMPORT_DLG[ImportConflictDialog:<br/>import reason shown,<br/>Use Server Data recommended]
     MEANINGFUL -->|No| APPLY_IMPORT[Apply full state replacement]
     IMPORT_DLG -->|Use Server| FORCE_DL
     IMPORT_DLG -->|Use Local| FORCE_UP
@@ -79,11 +79,13 @@ flowchart TD
     classDef error fill:#d33,stroke:#a11,color:#fff
     classDef cancel fill:#888,stroke:#555,color:#fff
     classDef dialog fill:#48f,stroke:#26d,color:#fff
+    classDef action fill:#e90,stroke:#b60,color:#fff,stroke-width:3px
 
     class IN_SYNC success
     class ERROR error
     class CANCELLED,DISABLE cancel
     class CONFIRM,CONFLICT_DLG,IMPORT_DLG,PWD_DLG,ENC_PROMPT dialog
+    class APPLY,APPLY_IMPORT,FORCE_UP,FORCE_DL,ENABLE_ENC,UPLOAD action
 ```
 
 **Legend:**
@@ -91,4 +93,5 @@ flowchart TD
 - 🟢 Green = success states
 - 🔴 Red = error states
 - 🔵 Blue = user-facing dialogs
+- 🟠 Orange = key actions (state changes, uploads, downloads)
 - ⚫ Gray = cancelled/disabled
