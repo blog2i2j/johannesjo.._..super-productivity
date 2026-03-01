@@ -297,9 +297,7 @@ export class SyncConfigService {
         (savedPrivateCfg as { isEncryptionEnabled?: boolean } | null)
           ?.isEncryptionEnabled ??
         false;
-      if (isEncryptionEnabled) {
-        globalConfig.isEncryptionEnabled = true;
-      }
+      globalConfig.isEncryptionEnabled = isEncryptionEnabled;
     }
 
     this._globalConfigService.updateSection('sync', globalConfig);
