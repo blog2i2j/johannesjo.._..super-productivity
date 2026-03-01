@@ -37,8 +37,11 @@ export function showOrFocus(passedWin: BrowserWindow): void {
 
   // focus window afterwards always
   setTimeout(() => {
+    if (win.isDestroyed()) return;
     win.focus();
     // Ensure Chromium renderer also gets keyboard focus (electron#20464)
-    win.webContents.focus();
+    if (!win.webContents.isDestroyed()) {
+      win.webContents.focus();
+    }
   }, 60);
 }

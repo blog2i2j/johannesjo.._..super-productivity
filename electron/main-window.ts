@@ -218,9 +218,20 @@ export const createWindow = async ({
     mainWin.show();
 
     // Workaround for Windows phantom focus bug (electron#20464):
-    // show() can silently fail to acquire keyboard focus after reboot
-    mainWin.blur();
-    mainWin.focus();
+    // show() can silently fail to acquire keyboard focus after reboot.
+    // blur() is not supported on Wayland and limited on macOS, so only
+    // apply the blur+focus cycle on Windows.
+    const IS_WINDOWS = process.platform === 'win32';
+    setTimeout(() => {
+      if (mainWin.isDestroyed()) return;
+      if (IS_WINDOWS) {
+        mainWin.blur();
+      }
+      mainWin.focus();
+      if (!mainWin.webContents.isDestroyed()) {
+        mainWin.webContents.focus();
+      }
+    }, 60);
   });
 
   initWinEventListeners(app);
