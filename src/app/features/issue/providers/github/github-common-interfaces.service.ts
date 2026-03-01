@@ -1,75 +1,69 @@
 import { Injectable, inject } from '@angular/core';
-import { Observable, of } from 'rxjs';
+import { firstValueFrom, Observable } from 'rxjs';
+import { map } from 'rxjs/operators';
 import { Task } from 'src/app/features/tasks/task.model';
-import { concatMap, first, map, switchMap } from 'rxjs/operators';
-import { IssueServiceInterface } from '../../issue-service-interface';
+import { BaseIssueProviderService } from '../../base/base-issue-provider.service';
+import { IssueData, SearchResultItem } from '../../issue.model';
 import { GithubApiService } from './github-api.service';
-import { IssueProviderGithub, SearchResultItem } from '../../issue.model';
 import { GithubCfg } from './github.model';
 import { GithubIssue, GithubIssueReduced } from './github-issue.model';
 import { truncate } from '../../../../util/truncate';
 import { getTimestamp } from '../../../../util/get-timestamp';
-import { isGithubEnabled } from './is-github-enabled.util';
 import { GITHUB_POLL_INTERVAL } from './github.const';
-import { IssueProviderService } from '../../issue-provider.service';
 
 @Injectable({
   providedIn: 'root',
 })
-export class GithubCommonInterfacesService implements IssueServiceInterface {
+export class GithubCommonInterfacesService extends BaseIssueProviderService<GithubCfg> {
   private readonly _githubApiService = inject(GithubApiService);
-  private readonly _issueProviderService = inject(IssueProviderService);
 
-  pollInterval: number = GITHUB_POLL_INTERVAL;
+  readonly providerKey = 'GITHUB' as const;
+  readonly pollInterval: number = GITHUB_POLL_INTERVAL;
 
   isEnabled(cfg: GithubCfg): boolean {
-    return isGithubEnabled(cfg);
+    return !!cfg && cfg.isEnabled && !!cfg.repo;
   }
 
   testConnection(cfg: GithubCfg): Promise<boolean> {
-    return this._githubApiService
-      .searchIssueForRepo$('', cfg)
-      .pipe(
-        map((res) => Array.isArray(res)),
-        first(),
-      )
-      .toPromise()
-      .then((result) => result ?? false);
+    return firstValueFrom(
+      this._githubApiService
+        .searchIssueForRepo$('', cfg)
+        .pipe(map((res) => Array.isArray(res))),
+    ).then((result) => result ?? false);
   }
 
   issueLink(issueId: number, issueProviderId: string): Promise<string> {
-    return this._getCfgOnce$(issueProviderId)
-      .pipe(map((cfg) => `https://github.com/${cfg.repo}/issues/${issueId}`))
-      .toPromise()
-      .then((result) => result ?? '');
+    return firstValueFrom(
+      this._getCfgOnce$(issueProviderId).pipe(
+        map((cfg) => `https://github.com/${cfg.repo}/issues/${issueId}`),
+      ),
+    ).then((result) => result ?? '');
   }
 
-  getById(issueId: number, issueProviderId: string): Promise<GithubIssue> {
-    return this._getCfgOnce$(issueProviderId)
-      .pipe(concatMap((githubCfg) => this._githubApiService.getById$(issueId, githubCfg)))
-      .toPromise()
-      .then((result) => {
-        if (!result) {
-          throw new Error('Failed to get GitHub issue');
-        }
-        return result;
-      });
+  getAddTaskData(issue: GithubIssueReduced): Partial<Task> & { title: string } {
+    return {
+      title: this._formatIssueTitle(issue.number, issue.title),
+      issueWasUpdated: false,
+      issueLastUpdated: new Date(issue.updated_at).getTime(),
+      isDone: issue.state === 'closed',
+    };
   }
 
-  searchIssues(searchTerm: string, issueProviderId: string): Promise<SearchResultItem[]> {
-    return this._getCfgOnce$(issueProviderId)
-      .pipe(
-        switchMap((githubCfg) =>
-          this.isEnabled(githubCfg)
-            ? this._githubApiService.searchIssueForRepo$(searchTerm, githubCfg)
-            : of([]),
-        ),
-      )
-      .toPromise()
-      .then((result) => result ?? []);
+  async getNewIssuesToAddToBacklog(
+    issueProviderId: string,
+    _allExistingIssueIds: number[] | string[],
+  ): Promise<GithubIssueReduced[]> {
+    const cfg = await firstValueFrom(this._getCfgOnce$(issueProviderId));
+    return await firstValueFrom(
+      this._githubApiService.searchIssueForRepoNoMap$(
+        cfg.backlogQuery || 'sort:updated state:open',
+        cfg,
+      ),
+    );
   }
 
-  async getFreshDataForIssueTask(task: Task): Promise<{
+  // Uses comment filtering for update detection
+  override async getFreshDataForIssueTask(task: Task): Promise<{
     taskChanges: Partial<Task>;
     issue: GithubIssue;
     issueTitle: string;
@@ -81,8 +75,10 @@ export class GithubCommonInterfacesService implements IssueServiceInterface {
       throw new Error('No issueId');
     }
 
-    const cfg = await this._getCfgOnce$(task.issueProviderId).toPromise();
-    const issue = await this._githubApiService.getById$(+task.issueId, cfg).toPromise();
+    const cfg = await firstValueFrom(this._getCfgOnce$(task.issueProviderId));
+    const issue = await firstValueFrom(
+      this._githubApiService.getById$(+task.issueId, cfg),
+    );
 
     // NOTE we are not able to filter out user updates to the issue itself by the user
     const filterUserName =
@@ -92,7 +88,7 @@ export class GithubCommonInterfacesService implements IssueServiceInterface {
       filterUserName && filterUserName.length > 1
         ? issue.comments.filter(
             (comment) =>
-              comment.user.login.toLowerCase() !== cfg.filterUsernameForIssueUpdates,
+              comment.user.login.toLowerCase() !== filterUserName,
           )
         : issue.comments;
 
@@ -112,76 +108,36 @@ export class GithubCommonInterfacesService implements IssueServiceInterface {
           issueWasUpdated: true,
         },
         issue,
-        issueTitle: this._formatIssueTitleForSnack(issue.number, issue.title),
+        issueTitle: truncate(this._formatIssueTitle(issue.number, issue.title)),
       };
     }
     return null;
   }
 
-  async getFreshDataForIssueTasks(
-    tasks: Task[],
-  ): Promise<{ task: Task; taskChanges: Partial<Task>; issue: GithubIssue }[]> {
-    return Promise.all(
-      tasks.map((task) =>
-        this.getFreshDataForIssueTask(task).then((refreshDataForTask) => ({
-          task,
-          refreshDataForTask,
-        })),
-      ),
-    ).then((items) => {
-      return items
-        .filter(({ refreshDataForTask, task }) => !!refreshDataForTask)
-        .map(({ refreshDataForTask, task }) => {
-          if (!refreshDataForTask) {
-            throw new Error('No refresh data for task js error');
-          }
-          return {
-            task,
-            taskChanges: refreshDataForTask.taskChanges,
-            issue: refreshDataForTask.issue,
-          };
-        });
-    });
+  protected _apiGetById$(
+    id: string | number,
+    cfg: GithubCfg,
+  ): Observable<IssueData | null> {
+    return this._githubApiService.getById$(+id, cfg);
   }
 
-  async getNewIssuesToAddToBacklog(
-    issueProviderId: string,
-    allExistingIssueIds: number[] | string[],
-  ): Promise<GithubIssueReduced[]> {
-    const cfg = await this._getCfgOnce$(issueProviderId).toPromise();
-    return await this._githubApiService
-      .searchIssueForRepoNoMap$(cfg.backlogQuery || 'sort:updated state:open', cfg)
-      .pipe(first())
-      .toPromise();
-
-    // .map((issue) => issue.issueData as GithubIssueReduced)
-
-    // .filter((issue) => allExistingIssueIds.includes(issue.issueData.id as string));
+  protected _apiSearchIssues$(
+    searchTerm: string,
+    cfg: GithubCfg,
+  ): Observable<SearchResultItem[]> {
+    return this._githubApiService.searchIssueForRepo$(searchTerm, cfg);
   }
 
-  getAddTaskData(issue: GithubIssueReduced): Partial<Task> & { title: string } {
-    return {
-      title: this._formatIssueTitle(issue.number, issue.title),
-      issueWasUpdated: false,
-      // NOTE: we use Date.now() instead to because updated does not account for comments
-      issueLastUpdated: new Date(issue.updated_at).getTime(),
-      isDone: this._isIssueDone(issue),
-    };
+  protected _formatIssueTitleForSnack(issue: IssueData): string {
+    const ghIssue = issue as GithubIssue;
+    return truncate(this._formatIssueTitle(ghIssue.number, ghIssue.title));
+  }
+
+  protected _getIssueLastUpdated(issue: IssueData): number {
+    return new Date((issue as GithubIssue).updated_at).getTime();
   }
 
   private _formatIssueTitle(id: number, title: string): string {
     return `#${id} ${title}`;
-  }
-
-  private _formatIssueTitleForSnack(id: number, title: string): string {
-    return `${truncate(this._formatIssueTitle(id, title))}`;
-  }
-
-  private _getCfgOnce$(issueProviderId: string): Observable<IssueProviderGithub> {
-    return this._issueProviderService.getCfgOnce$(issueProviderId, 'GITHUB');
-  }
-
-  private _isIssueDone(issue: GithubIssueReduced): boolean {
-    return issue.state === 'closed';
   }
 }

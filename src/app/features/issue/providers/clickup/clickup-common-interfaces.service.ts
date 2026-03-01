@@ -1,11 +1,10 @@
 import { Injectable, inject } from '@angular/core';
-import { Observable, of, firstValueFrom } from 'rxjs';
-import { concatMap, first, map, switchMap } from 'rxjs/operators';
-import { IssueServiceInterface } from '../../issue-service-interface';
-import { IssueProviderService } from '../../issue-provider.service';
+import { Observable, firstValueFrom } from 'rxjs';
+import { concatMap, first, map } from 'rxjs/operators';
+import { BaseIssueProviderService } from '../../base/base-issue-provider.service';
 import { ClickUpApiService } from './clickup-api.service';
 import { ClickUpCfg } from './clickup.model';
-import { SearchResultItem } from '../../issue.model';
+import { IssueData, SearchResultItem } from '../../issue.model';
 import { ClickUpTask, ClickUpTaskReduced } from './clickup-issue.model';
 import {
   mapClickUpAttachmentToTaskAttachment,
@@ -15,14 +14,15 @@ import {
 import { Task } from '../../../tasks/task.model';
 import { TaskAttachment } from '../../../tasks/task-attachment/task-attachment.model';
 import { truncate } from '../../../../util/truncate';
-import { IssueLog } from '../../../../core/log';
 
 @Injectable({
   providedIn: 'root',
 })
-export class ClickUpCommonInterfacesService implements IssueServiceInterface {
+export class ClickUpCommonInterfacesService extends BaseIssueProviderService<ClickUpCfg> {
   private _clickUpApiService = inject(ClickUpApiService);
-  private _issueProviderService = inject(IssueProviderService);
+
+  readonly providerKey = 'CLICKUP' as const;
+  readonly pollInterval = 60000;
 
   isEnabled(cfg: ClickUpCfg): boolean {
     return !!cfg && cfg.isEnabled && !!cfg.apiKey;
@@ -39,7 +39,8 @@ export class ClickUpCommonInterfacesService implements IssueServiceInterface {
       .catch(() => false);
   }
 
-  issueLink(issueId: string, issueProviderId: string): Promise<string> {
+  // Fetches the issue to get the URL
+  override issueLink(issueId: string, issueProviderId: string): Promise<string> {
     return firstValueFrom(
       this._getCfgOnce$(issueProviderId).pipe(
         concatMap((cfg) =>
@@ -50,40 +51,72 @@ export class ClickUpCommonInterfacesService implements IssueServiceInterface {
     ).then((res) => res ?? '');
   }
 
-  getById(issueId: string, issueProviderId: string): Promise<ClickUpTask> {
-    return firstValueFrom(
-      this._getCfgOnce$(issueProviderId).pipe(
-        concatMap((cfg) => this._clickUpApiService.getById$(issueId, cfg)),
-        first(),
-      ),
-    ).then((res) => {
-      if (!res) throw new Error('Failed to get ClickUp task');
-      return res;
-    });
+  getAddTaskData(issue: ClickUpTaskReduced): Partial<Task> & { title: string } {
+    return {
+      title: issue.name,
+      issueWasUpdated: false,
+      issueLastUpdated: parseInt(issue.date_updated, 10),
+      isDone: isClickUpTaskDone(issue),
+    };
   }
 
-  searchIssues(searchTerm: string, issueProviderId: string): Promise<SearchResultItem[]> {
-    return firstValueFrom(
-      this._getCfgOnce$(issueProviderId).pipe(
-        switchMap((cfg) =>
-          this.isEnabled(cfg)
-            ? this._clickUpApiService.searchTasks$(searchTerm, cfg).pipe(
-                map((tasks) =>
-                  tasks.map((task) => ({
-                    title: task.name,
-                    issueType: 'CLICKUP' as const,
-                    issueData: task,
-                  })),
-                ),
-              )
-            : of([]),
-        ),
-        first(),
-      ),
-    ).then((res) => res ?? []);
+  getMappedAttachments(issue: ClickUpTask): TaskAttachment[] {
+    return (issue.attachments || []).map(mapClickUpAttachmentToTaskAttachment);
   }
 
-  async getFreshDataForIssueTask(task: Task): Promise<{
+  getSubTasksForIssue(
+    issue: ClickUpTask,
+  ): Array<Partial<Task> & { title: string; related_to: string }> {
+    if (!issue.subtasks || issue.subtasks.length === 0) {
+      return [];
+    }
+
+    return issue.subtasks.map((subtask) => ({
+      title: subtask.name,
+      issueWasUpdated: false,
+      issueLastUpdated: parseInt(subtask.date_updated, 10),
+      isDone: isClickUpTaskDone(subtask),
+      related_to: issue.id,
+      issueId: subtask.id,
+      issueType: 'CLICKUP' as const,
+    }));
+  }
+
+  async getSubTasks(
+    issueId: string | number,
+    issueProviderId: string,
+    issue: ClickUpTaskReduced,
+  ): Promise<ClickUpTaskReduced[]> {
+    let subtasks = (issue as ClickUpTask).subtasks;
+
+    if (!subtasks) {
+      const fullIssue = (await this.getById(
+        issueId.toString(),
+        issueProviderId,
+      )) as ClickUpTask;
+      subtasks = fullIssue.subtasks;
+    }
+
+    if (subtasks) {
+      return subtasks.filter((subtask) => subtask.status?.type !== 'closed');
+    }
+    return [];
+  }
+
+  async getNewIssuesToAddToBacklog(
+    issueProviderId: string,
+    allExistingIssueIds: (string | number)[],
+  ): Promise<ClickUpTaskReduced[]> {
+    const cfg = await firstValueFrom(this._getCfgOnce$(issueProviderId));
+    const tasks = await firstValueFrom(
+      this._clickUpApiService.searchTasks$('', cfg).pipe(first()),
+    );
+
+    return tasks.filter((task) => !allExistingIssueIds.includes(task.id));
+  }
+
+  // Uses mapClickUpTaskToTask for richer field mapping
+  override async getFreshDataForIssueTask(task: Task): Promise<{
     taskChanges: Partial<Task>;
     issue: ClickUpTask;
     issueTitle: string;
@@ -92,19 +125,10 @@ export class ClickUpCommonInterfacesService implements IssueServiceInterface {
       throw new Error('No issueProviderId or issueId');
     }
 
-    const cfg = await firstValueFrom(this._getCfgOnce$(task.issueProviderId)).then(
-      (res) => {
-        if (!res) throw new Error('No config found');
-        return res;
-      },
-    );
-
+    const cfg = await firstValueFrom(this._getCfgOnce$(task.issueProviderId));
     const issue = await firstValueFrom(
       this._clickUpApiService.getById$(task.issueId, cfg),
-    ).then((res) => {
-      if (!res) throw new Error('Issue not found');
-      return res;
-    });
+    );
 
     const issueLastUpdated = parseInt(issue.date_updated, 10);
     const wasUpdated = issueLastUpdated > (task.issueLastUpdated || 0);
@@ -123,106 +147,33 @@ export class ClickUpCommonInterfacesService implements IssueServiceInterface {
     return null;
   }
 
-  async getFreshDataForIssueTasks(
-    tasks: Task[],
-  ): Promise<{ task: Task; taskChanges: Partial<Task>; issue: ClickUpTask }[]> {
-    // Parallel requests might be too much for API limits? ClickUp limits are generous mostly.
-    return Promise.all(
-      tasks.map(
-        (task) =>
-          this.getFreshDataForIssueTask(task)
-            .then((refreshData) => ({
-              task,
-              refreshData,
-            }))
-            .catch((e) => {
-              IssueLog.error('ClickUp getFreshDataForIssueTasks error', e);
-              return { task, refreshData: null };
-            }), // suppress error to not fail all?
+  protected _apiGetById$(
+    id: string | number,
+    cfg: ClickUpCfg,
+  ): Observable<IssueData | null> {
+    return this._clickUpApiService.getById$(id.toString(), cfg);
+  }
+
+  protected _apiSearchIssues$(
+    searchTerm: string,
+    cfg: ClickUpCfg,
+  ): Observable<SearchResultItem[]> {
+    return this._clickUpApiService.searchTasks$(searchTerm, cfg).pipe(
+      map((tasks) =>
+        tasks.map((t) => ({
+          title: t.name,
+          issueType: 'CLICKUP' as const,
+          issueData: t,
+        })),
       ),
-    ).then((items) => {
-      return items
-        .filter(({ refreshData }) => !!refreshData)
-        .map(({ refreshData, task }) => ({
-          task,
-          taskChanges: refreshData!.taskChanges,
-          issue: refreshData!.issue,
-        }));
-    });
-  }
-
-  getMappedAttachments(issue: ClickUpTask): TaskAttachment[] {
-    return (issue.attachments || []).map(mapClickUpAttachmentToTaskAttachment);
-  }
-
-  async getNewIssuesToAddToBacklog?(
-    issueProviderId: string,
-    allExistingIssueIds: (string | number)[],
-  ): Promise<ClickUpTaskReduced[]> {
-    const cfg = await firstValueFrom(this._getCfgOnce$(issueProviderId)).then(
-      (result) => {
-        if (!result) {
-          throw new Error('No config found');
-        }
-        return result;
-      },
     );
-
-    const tasks = await firstValueFrom(
-      this._clickUpApiService.searchTasks$('', cfg).pipe(first()),
-    ).then((res) => res ?? []);
-
-    return tasks.filter((task) => !allExistingIssueIds.includes(task.id));
   }
 
-  pollInterval = 60000;
-
-  getAddTaskData(issue: ClickUpTaskReduced): Partial<Task> & { title: string } {
-    return {
-      title: issue.name,
-      issueWasUpdated: false,
-      issueLastUpdated: parseInt(issue.date_updated, 10),
-      isDone: isClickUpTaskDone(issue),
-    };
+  protected _formatIssueTitleForSnack(issue: IssueData): string {
+    return truncate((issue as ClickUpTask).name);
   }
 
-  getSubTasksForIssue(
-    issue: ClickUpTask,
-  ): Array<Partial<Task> & { title: string; related_to: string }> {
-    if (!issue.subtasks || issue.subtasks.length === 0) {
-      return [];
-    }
-
-    return issue.subtasks.map((subtask) => ({
-      title: subtask.name,
-      issueWasUpdated: false,
-      issueLastUpdated: parseInt(subtask.date_updated, 10),
-      isDone: isClickUpTaskDone(subtask),
-      related_to: issue.id, // Link to parent task
-      issueId: subtask.id,
-      issueType: 'CLICKUP' as const,
-    }));
-  }
-
-  async getSubTasks(
-    issueId: string | number,
-    issueProviderId: string,
-    issue: ClickUpTaskReduced,
-  ): Promise<ClickUpTaskReduced[]> {
-    let subtasks = (issue as ClickUpTask).subtasks;
-
-    if (!subtasks) {
-      const fullIssue = await this.getById(issueId.toString(), issueProviderId);
-      subtasks = fullIssue.subtasks;
-    }
-
-    if (subtasks) {
-      return subtasks.filter((subtask) => subtask.status?.type !== 'closed');
-    }
-    return [];
-  }
-
-  private _getCfgOnce$(issueProviderId: string): Observable<ClickUpCfg> {
-    return this._issueProviderService.getCfgOnce$(issueProviderId, 'CLICKUP');
+  protected _getIssueLastUpdated(issue: IssueData): number {
+    return parseInt((issue as ClickUpTask).date_updated, 10);
   }
 }
