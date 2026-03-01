@@ -216,6 +216,45 @@ describe('FileBasedEncryptionService', () => {
       expect(mockAdapter.setLastServerSeq).toHaveBeenCalledWith(42);
     });
 
+    it('should create adapter with correct encrypt config and password', async () => {
+      await service.enableEncryption('my-password');
+
+      expect(mockFileBasedAdapter.createAdapter).toHaveBeenCalledWith(
+        mockProvider,
+        jasmine.objectContaining({ isCompress: true, isEncrypt: true }),
+        'my-password',
+      );
+    });
+
+    it('should pass correct params to uploadSnapshot', async () => {
+      await service.enableEncryption('my-password');
+
+      expect(mockAdapter.uploadSnapshot).toHaveBeenCalledWith(
+        jasmine.anything(), // state
+        'testClient', // clientId
+        'recovery', // reason
+        { testClient: 1 }, // vectorClock
+        jasmine.any(Number), // schemaVersion
+        true, // isEncrypt
+        jasmine.any(String), // uuid
+      );
+    });
+
+    it('should preserve existing provider config properties', async () => {
+      await service.enableEncryption('my-password');
+
+      expect(mockProviderManager.setProviderConfig).toHaveBeenCalledWith(
+        SyncProviderId.WebDAV,
+        jasmine.objectContaining({
+          baseUrl: 'https://webdav.example.com',
+          userName: 'testuser',
+          password: 'testpass',
+          syncFilePath: '/sync/data.json',
+          encryptKey: 'my-password',
+        }),
+      );
+    });
+
     it('should throw when snapshot upload fails', async () => {
       mockAdapter.uploadSnapshot.and.resolveTo({
         accepted: false,
@@ -244,6 +283,68 @@ describe('FileBasedEncryptionService', () => {
 
       // Verify setPrivateCfg is NOT called directly
       expect(mockProvider.setPrivateCfg).not.toHaveBeenCalled();
+    });
+
+    it('should preserve existing provider config properties', async () => {
+      await service.changePassword('new-password');
+
+      expect(mockProviderManager.setProviderConfig).toHaveBeenCalledWith(
+        SyncProviderId.WebDAV,
+        jasmine.objectContaining({
+          baseUrl: 'https://webdav.example.com',
+          userName: 'testuser',
+          password: 'testpass',
+          syncFilePath: '/sync/data.json',
+          encryptKey: 'new-password',
+        }),
+      );
+    });
+
+    it('should clear derived key cache and wrapped provider cache', async () => {
+      await service.changePassword('new-password');
+
+      expect(mockDerivedKeyCache.clearCache).toHaveBeenCalled();
+      expect(mockWrappedProviderService.clearCache).toHaveBeenCalled();
+    });
+
+    it('should update global config with isEncryptionEnabled: true', async () => {
+      await service.changePassword('new-password');
+
+      expect(mockGlobalConfigService.updateSection).toHaveBeenCalledWith('sync', {
+        isEncryptionEnabled: true,
+      });
+    });
+
+    it('should upload encrypted snapshot before saving config', async () => {
+      await service.changePassword('new-password');
+
+      expect(mockAdapter.uploadSnapshot).toHaveBeenCalled();
+      expect(mockAdapter.uploadSnapshot).toHaveBeenCalledBefore(
+        mockProviderManager.setProviderConfig,
+      );
+    });
+
+    it('should create adapter with isEncrypt: true', async () => {
+      await service.changePassword('new-password');
+
+      expect(mockFileBasedAdapter.createAdapter).toHaveBeenCalledWith(
+        mockProvider,
+        jasmine.objectContaining({ isEncrypt: true }),
+        'new-password',
+      );
+    });
+
+    it('should NOT update config when upload fails', async () => {
+      mockAdapter.uploadSnapshot.and.resolveTo({
+        accepted: false,
+        error: 'Upload rejected',
+      });
+
+      await expectAsync(service.changePassword('new-password')).toBeRejectedWithError(
+        /Snapshot upload failed/,
+      );
+
+      expect(mockProviderManager.setProviderConfig).not.toHaveBeenCalled();
     });
   });
 
@@ -302,11 +403,35 @@ describe('FileBasedEncryptionService', () => {
       expect(mockProviderManager.setProviderConfig).not.toHaveBeenCalled();
     });
 
+    it('should pass isEncrypt=false to uploadSnapshot', async () => {
+      await service.disableEncryption();
+
+      expect(mockAdapter.uploadSnapshot).toHaveBeenCalledWith(
+        jasmine.anything(), // state
+        'testClient', // clientId
+        'recovery', // reason
+        { testClient: 1 }, // vectorClock
+        jasmine.any(Number), // schemaVersion
+        false, // isEncrypt
+        jasmine.any(String), // uuid
+      );
+    });
+
     it('should throw when no active provider', async () => {
       mockProviderManager.getActiveProvider.and.returnValue(null);
 
       await expectAsync(service.disableEncryption()).toBeRejectedWithError(
         /No active sync provider/,
+      );
+    });
+
+    it('should propagate error when config update fails after upload', async () => {
+      mockProviderManager.setProviderConfig.and.rejectWith(
+        new Error('Config save failed'),
+      );
+
+      await expectAsync(service.disableEncryption()).toBeRejectedWithError(
+        'Config save failed',
       );
     });
   });
